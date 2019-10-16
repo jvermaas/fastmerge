@@ -40,6 +40,7 @@ int main (int argc, char *argv[]) {
 		printf("%d bonds, %d angles, %d dihedrals, %d impropers, %d crossterms\n", js->nbonds, js->numangles, js->numdihedrals, js->numimpropers, js->numcterms);
 		close_js_read((void *)js);
 	}
+
 	printf("%d atoms in total\n", ntotal);
 	printf("%d bonds, %d angles, %d dihedrals, %d impropers, %d crossterms\n", tbonds, tangles, tdihedral, timproper, tcross);
 	jshandle *outjs = (jshandle *) open_js_write(outputfilename, "js", ntotal);
@@ -49,7 +50,11 @@ int main (int argc, char *argv[]) {
 	}
 	molfile_atom_t *atoms = (molfile_atom_t*) malloc(sizeof(molfile_atom_t) * ntotal);
 	molfile_timestep_t *ts = (molfile_timestep_t*) malloc(sizeof(molfile_timestep_t));
-	float *coords = (float *) malloc(3L * ntotal * sizeof(float));
+	//float *coords = (float *) malloc(3L * ntotal * sizeof(float));
+	float *unalignedcoords;
+	long blocksz = MOLFILE_DIRECTIO_MIN_BLOCK_SIZE;
+    long sz = 3L*sizeof(float)*ntotal + blocksz;
+	float *coords = (float *) alloc_aligned_ptr(sz, blocksz, (void**) &unalignedcoords);
 	int *bondfrom = (int *) malloc(tbonds * sizeof(int));
 	int *bondto = (int *) malloc(tbonds * sizeof(int));
 	int *angles = (int *) malloc(3L * tangles * sizeof(int));
@@ -64,7 +69,9 @@ int main (int argc, char *argv[]) {
 			//File read failed
 			printf("Failed to open file %s\n", argv[i]);
 		}
-		ts->coords = &(coords[3L*offset]);
+		float *unalignedtmpcoords;
+		float *tmpcoords = (float *) alloc_aligned_ptr(3L*sizeof(float)*natoms + blocksz, blocksz, (void**) &unalignedtmpcoords);
+		ts->coords = tmpcoords;
 		js->verbose = 1;
 		read_js_structure((void *) js, optflags, &(atoms[offset]));
 		//Add the offset to all the bond indexes.
@@ -102,12 +109,31 @@ int main (int argc, char *argv[]) {
 		coffset += 8L * js->numcterms;
 		//Now read the timestep info.
 		read_js_timestep((void *) js, natoms, ts);
-		for (j = 0; j < 10; j++) {
-			printf("Atom %d: %f %f %f\n", j, coords[3L*(offset+j)+0], coords[3L*(offset+j)+1], coords[3L*(offset+j)+2]);
+		memcpy(&(coords[3L*offset]),tmpcoords, sizeof(float) * 3L * natoms);
+		#if DEBUG
+		int badcounter = 0;
+		for (j = 0; j < natoms; j++) {
+			if (abs(coords[3L*(offset+j)+0]) < 0.1 && abs(coords[3L*(offset+j)+1]) < 0.1 && abs(coords[3L*(offset+j)+2]) < 0.1) {
+				badcounter++;
+			}
 		}
+		printf("%d of %d atoms have coordinates at the origin\n", badcounter, natoms);
+		#endif
+		// 	printf("Atom %d: %f %f %f\n", j, coords[3L*(offset+j)+0], coords[3L*(offset+j)+1], coords[3L*(offset+j)+2]);
+		// }
 		offset += natoms;
 		close_js_read((void *)js);
+		free(unalignedtmpcoords);
 	}
+	#if DEBUG
+	j = 0;
+	for (i=0; i < ntotal; i++) {
+		if (abs(coords[3L*i+0]) < 0.1 && abs(coords[3L*i+1]) < 0.1 && abs(coords[3L*i+2]) < 0.1) {
+			j++;
+		}
+	}
+	printf("%d of %d atoms have coordinates at the origin\n", j, ntotal);
+	#endif
 	ts->coords=coords;
 	outjs->verbose = 1;
 	outjs->nbonds = tbonds;
